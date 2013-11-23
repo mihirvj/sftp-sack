@@ -77,6 +77,26 @@ void sendSegment(int sock, uchar segment[MSS], int buf_len)
 	write_to(sock, segment, buf_len, SERVER_ADDR, SERVER_PORT);
 }
 
+uint extractAckNo(uchar segment[HEADSIZE])
+{
+	uint ackNo = 0;
+	bool nak = false;
+
+	if((uint) segment[0] == 255) // NAK
+		nak = true;
+	else
+	{
+		ackNo = (uint) segment[0];
+		ackNo = ackNo << 24;
+	}
+
+	ackNo = ackNo + (((uint) segment[1]) << 16);
+	ackNo = ackNo + (((uint) segment[2]) << 8);
+	ackNo = ackNo + ((uint) segment[3]);
+
+	return nak ? (-1) : ackNo;
+}
+
 void *listener(void *arg);
 int isValid(uchar segment[HEADSIZE]);
 void sendSelective();
@@ -208,9 +228,11 @@ int main()
 
 void *listener(void *arg)
 {
+	int i;
 	uchar response[HEADSIZE];
 	struct sockaddr_in serverCon;
 	int bytesRead;
+	uint recvAck;
 
 	int sock = * (int *) arg;
 
@@ -235,8 +257,23 @@ void *listener(void *arg)
 		{
 			if(isValid(response)) // check whether correct ack has been received
 			{
-				// purge frame and slide head pointer
-				SLIDE_WIN();
+				bool isFirst = true;
+
+				recvAck = extractAckNo(response);
+
+				if(recvAck == AN)
+				{
+					SLIDE_WIN();
+				}
+				else if(recvAck > AN)
+				{
+					// purge frame and slide head pointer multiple times due to cumulative acks
+					for(i = 0; i != (recvAck / MSS) || !isFirst; i++)
+					{
+						SLIDE_WIN();
+						isFirst = false;
+					}
+				}
 
 				printWinStats();
 			}
@@ -258,21 +295,34 @@ int isValid(uchar segment[HEADSIZE])
 {
 	uint ackNo = 0;
 
-	ackNo = (uint) segment[0];
+	/*ackNo = (uint) segment[0];
 	ackNo = ackNo << 24;
 
 	ackNo = ackNo + (((uint) segment[1]) << 16);
 	ackNo = ackNo + (((uint) segment[2]) << 8);
-	ackNo = ackNo + ((uint) segment[3]);
+	ackNo = ackNo + ((uint) segment[3]);*/
+
+	ackNo = extractAckNo(segment);
 
 #ifdef APP
 	printf("[log] received ack for: %d\nexpected: %d\n", ackNo, AN);
+	printf("flag: %d\n", ackNo < 0);
+
 #endif
 
-	if(((uint) segment[0]) < 0) // it's a negative ack
+	if(ackNo == -1)
+	{
+#ifdef APP
+	printf("[log] it's a negative ack. returning 0\n");
+#endif
 		return 0;
+	}
 
-	return ackNo >= AN;
+#ifdef APP
+	printf("[log] it's a positive ack. returning %d\n", ackNo >= AN);
+#endif
+
+	return ackNo >= AN; // cannot do == because of cumulative acks
 }
 
 void sendSelective(int sock)
@@ -280,22 +330,27 @@ void sendSelective(int sock)
 	int prevIndex = 0;
 	int count = SF;
 	uchar segment[MSS];
+	int i;
 
-	for(count = SF * MSS; count <= (SF + 1) * MSS; count++)
+	for(count = SF * MSS; count < ((SF + 1) * MSS) % (WINSIZE * MSS); count++)
 	{
-		if(prevIndex == 0 && count > SF) // do not consider first 
-		{
-			sendSegment(sock, segment, MSS);
-#ifdef APP
-	printf("[log gobackn] sending segment: %s\n", segment);
-#endif
-
-			memset(segment, 0, MSS);
-		}
-
 		segment[prevIndex] = buffer[count];
 		
-		prevIndex = (prevIndex + 1) % MSS;
+		prevIndex++;
+	}
+
+	{
+		sendSegment(sock, segment, MSS);
+#ifdef APP
+	printf("[log sack] sending segment:");
+
+	for(i=0; i < MSS; i++)
+		printf("%c(%d), ", segment[i], (int) segment[i]);
+
+	printf("\n");
+#endif
+
+		memset(segment, 0, MSS);
 	}
 
 }

@@ -1,6 +1,6 @@
 /************************************************************
 *			     receiver.c
-*		Simple FTP Client Implementation
+*		Simple FTP Server Implementation
 *	      Authors: Mihir Joshi, Fenil Kavathia
 *			    csc573 NCSU
 ************************************************************/
@@ -9,6 +9,7 @@
 #include "config.h"
 #include "fops/fileop.h"
 #include<stdbool.h>
+#include<assert.h>
 
 #define SERVER_PORT 7735
 #define SLIDE_WIN() RF = (RF + 1) % WINSIZE;\
@@ -42,7 +43,7 @@ void storeSegment(uchar segment[MSS])
 	int i;
 	uint bufSize = WINSIZE * MSS * 2;
 
-	if(VRF == RN)
+	if(VRF > RN)
 	{
 #ifdef APP
 	printf("[log] VRF reached RN. No window space available to store out of order segments..\n");
@@ -50,12 +51,28 @@ void storeSegment(uchar segment[MSS])
 		return;
 	}
 
+#ifdef APP
+	printf("[log] storing segment at location starting %d: ", (VRF * MSS) % bufSize);
+
+#endif
+
 	for(i=0;i<MSS-HEADSIZE;i++)
 	{
-		buffer[(VRF * MSS + i) % bufSize] = segment[i];
+		buffer[((VRF * MSS) % bufSize) + i] = segment[i];
+#ifdef APP
+	printf("%c(%d), ", buffer[((VRF * MSS) % bufSize) + i], (int) buffer[((VRF * MSS) % bufSize) + i]);
+#endif
 	}
 
+#ifdef APP
+	printf("\n");
+#endif
+
 	VRF = (VRF + 1) % (WINSIZE);
+
+#ifdef APP
+	printf("[log] VRF: %d\n", VRF);
+#endif
 }
 
 void sendNak(int sock, char senderIP[50], int senderPort)
@@ -115,8 +132,17 @@ void writeToFile(int file, uchar segment[MSS], int buf_len)
 			break;
 	}
 
-#ifdef GRAN1
+#ifdef APP
 	printf("[log] writing to file %d bytes\n", validCount);
+#endif
+
+#ifdef APP
+	printf("[log] bytes stored in file: ");
+
+	for(i=0; i < validCount; i++)
+		printf("%c(%d), ", segment[i], (int) segment[i]);
+
+	printf("\n");
 #endif
 
 	output_to(file, segment, validCount);
@@ -210,14 +236,9 @@ int main()
 
 		recvSeq = extractSeqNo(request);
 
-		if(recvSeq != RF * MSS && !nakSent)
+		if(recvSeq > RF * MSS && !nakSent)
 		{
-/*
-#ifdef DROP
-	if(packetCount % 3 != 0 && packetCount != 0)
-	{
-		sleep(2);
-#endif*/
+
 			sendNak(sock, req_from, in_port);
 
 			nakSent = true;
@@ -229,6 +250,9 @@ int main()
 			storeSegment(request);
 
 			marked[recvSeq] = true;
+#ifdef APP
+	printf("[log] marking %d\n", recvSeq);
+#endif
 		}
 		else if(recvSeq == RF * MSS) // correct segment. yay!!!
 		{
@@ -237,33 +261,61 @@ int main()
 #ifdef APP
 	printf("[log] valid segment found for seq no: %d\n", RF * MSS);
 #endif
+#ifdef DROP
+	if(packetCount % 3 == 0 && packetCount != 0)
+	{
+		printf("[drop log]\n-------------- dropping packet: %d at seq no: %d\n---------------\n", packetCount, recvSeq);
+		packetCount++;
+		continue;
+	}
+	else
+	{
+		sleep(2);
+	}
+#endif	
+			removeHeader(request);
+
+			storeSegment(request);
+
 			marked[recvSeq] = true;
 
-			for(i= RF * MSS; marked[i] == true ; i = (i + MSS) % (WINSIZE * MSS))
-			{
-				for(j = i; j < MSS - HEADSIZE; j++)
-					segment[j] = buffer[i + j];
+#ifdef APP
+	printf("[log] marking %d\n", recvSeq);
+#endif
 
+			for(i= RF * MSS; marked[i] == true || RF < VRF ; i = (i + MSS - HEADSIZE) % (WINSIZE * MSS))
+			{
+#ifdef APP
+	printf("[log] extracting from buffer at location %d:\n", i);
+#endif
+				for(j = 0; j < MSS - HEADSIZE; j++)
+				{
+					segment[j] = buffer[i + j];
+				}
+#ifdef APP
+	printf("[log] extracted segment from buffer: ");
+
+	for(j=0; j < MSS - HEADSIZE; j++)
+		printf("%c(%d), ", segment[j], (int)segment[j]);
+
+	printf("\n");
+#endif
 				writeToFile(file, segment, MSS - HEADSIZE);
 
 				SLIDE_WIN();
 
 				marked[i] = false;
-
+#ifdef APP
+	printf("[log] marking %d false\n", recvSeq);
+#endif
 				prev = i; // prev points to previous frame to be acknowledged. This is for cumulative ack
 			}
 
 			nakSent = false;
 
 			sendAck(sock, prev, req_from, in_port); // send cumulative ack
+			assert(RF == VRF);
 		}
-/*#ifdef DROP
-	}
-	else
-	{
-		printf("[drop log]\n-------------- dropping packet: %dat seq no: %d\n---------------\n", packetCount, RN * MSS);
-	}
-#endif*/	
 		else
 		{
 #ifdef APP
