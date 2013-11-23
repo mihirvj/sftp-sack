@@ -1,4 +1,4 @@
-sftp-sack
-=========
+sftp
+====
 
-simple ftp with selective acknowledgments
+simple ftp application
