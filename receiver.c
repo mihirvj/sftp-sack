@@ -39,42 +39,6 @@ void removeHeader(uchar *segment)
 	segment[i] = '\0';
 }
 
-/*void storeSegment(uchar *segment)
-{
-	int i;
-
-	if(VRF > RN)
-	{
-#ifdef APP
-	printf("[log] VRF reached RN. No window space available to store out of order segments..\n");
-#endif
-		return;
-	}
-
-#ifdef APP
-	printf("[log] storing segment at location starting %d: ", (VRF * (MSS)));
-
-#endif
-
-	for(i=0;i<MSS-HEADSIZE;i++)
-	{
-		buffer[((VRF * (MSS))) + i] = segment[i];
-#ifdef APP
-	printf("%c(%d), ", buffer[((VRF * (MSS))) + i], (int) buffer[((VRF * (MSS))) + i]);
-#endif
-	}
-
-#ifdef APP
-	printf("\n");
-#endif
-
-	VRF = (VRF + 1);
-
-#ifdef APP
-	printf("[log] VRF: %d\n", VRF);
-#endif
-}*/
-
 void storeSegment(uchar *segment, uint start)
 {
         int i;
@@ -189,6 +153,8 @@ uint extractSeqNo(uchar *segment)
 
 	return seqNo;
 }
+
+bool canDrop(int packetCount, int probLoss);
 
 int main(int argc, char **argv)
 {
@@ -326,18 +292,17 @@ int main(int argc, char **argv)
 #ifdef APP
 	printf("[log] valid segment found for seq no: %d\n", RF * MSS);
 #endif
-#ifdef DROP
-	if(packetCount % probLoss == 0 && packetCount != 0)
-	{
-		printf("[drop log]\n-------------- dropping packet: %d at seq no: %d\n---------------\n", packetCount, recvSeq);
-		packetCount++;
-		continue;
-	}
-	else
-	{
-		usleep(100);
-	}
-#endif	
+			if(canDrop(packetCount, probLoss))
+			{
+				printf("Packet loss, sequence number: %d\n", recvSeq);
+				packetCount++;
+				continue;
+			}
+			else
+			{
+				usleep(100);
+			}
+		
 			removeHeader(request);
 
 			storeSegment(request, recvSeq);
@@ -427,4 +392,9 @@ int isValid(uchar segment[MSS])
 #endif
 
 	return seqNo >= (RF * MSS) && seqNo <= (RN * MSS);
+}
+
+bool canDrop(int packetCount, int probLoss)
+{
+	return (packetCount % probLoss == 0 && packetCount != 0);
 }

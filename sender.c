@@ -277,9 +277,7 @@ void *listener(void *arg)
 		// timeout after TIMEOUT seconds
 		if(bytesRead < 0)
 		{
-#ifdef APP
-	printf("[log] timer expired for sequence number: %d\n", AN);
-#endif
+			printf("timer expired for sequence number: %d\n", AN);
 			pthread_mutex_lock(&mutex);	
 			sendSelective(sock);
 			pthread_mutex_unlock(&mutex);
