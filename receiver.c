@@ -12,10 +12,11 @@
 #include<assert.h>
 
 //#define SERVER_PORT 65413
-#define SLIDE_WIN() RF = (RF + 1) % WINSIZE;\
-		RN = (RN + 1) % WINSIZE
+#define SLIDE_WIN() RF = (RF + 1);\
+		RN = (RN + 1)
 
-#define IS_IN_WINDOW(seq) (seq >= RF * MSS && seq <= RN * MSS)
+#define IS_IN_WINDOW(seq) (seq > RF * MSS)
+#define INFINITE_BUFFER 1024 * 1024
 
 uint RF, RN; // receiver window variables
 uint VRF; // virtual receiver window head pointer
@@ -38,10 +39,9 @@ void removeHeader(uchar *segment)
 	segment[i] = '\0';
 }
 
-void storeSegment(uchar *segment)
+/*void storeSegment(uchar *segment)
 {
 	int i;
-	uint bufSize = WINSIZE * MSS * 2;
 
 	if(VRF > RN)
 	{
@@ -52,15 +52,15 @@ void storeSegment(uchar *segment)
 	}
 
 #ifdef APP
-	printf("[log] storing segment at location starting %d: ", (VRF * MSS) % bufSize);
+	printf("[log] storing segment at location starting %d: ", (VRF * (MSS)));
 
 #endif
 
 	for(i=0;i<MSS-HEADSIZE;i++)
 	{
-		buffer[((VRF * MSS) % bufSize) + i] = segment[i];
+		buffer[((VRF * (MSS))) + i] = segment[i];
 #ifdef APP
-	printf("%c(%d), ", buffer[((VRF * MSS) % bufSize) + i], (int) buffer[((VRF * MSS) % bufSize) + i]);
+	printf("%c(%d), ", buffer[((VRF * (MSS))) + i], (int) buffer[((VRF * (MSS))) + i]);
 #endif
 	}
 
@@ -68,10 +68,38 @@ void storeSegment(uchar *segment)
 	printf("\n");
 #endif
 
-	VRF = (VRF + 1) % (WINSIZE);
+	VRF = (VRF + 1);
 
 #ifdef APP
 	printf("[log] VRF: %d\n", VRF);
+#endif
+}*/
+
+void storeSegment(uchar *segment, uint start)
+{
+        int i;
+
+#ifdef APP
+        printf("[log] storing segment at location starting %d: ", (start));
+
+#endif
+
+        for(i=0;i<MSS-HEADSIZE;i++)
+        {
+                buffer[start + i] = segment[i];
+#ifdef APP
+        printf("%c(%d), ", buffer[start + i], (int) buffer[start + i]);
+#endif
+        }
+
+#ifdef APP
+        printf("\n");
+#endif
+
+        VRF = (VRF + 1);
+
+#ifdef APP
+        printf("[log] VRF: %d\n", VRF);
 #endif
 }
 
@@ -210,16 +238,16 @@ int main(int argc, char **argv)
 	printf("[log] params set: winsize = %d, mss = %d\n", WINSIZE, MSS);
 #endif
 
-	marked = (bool *) malloc(WINSIZE * MSS * sizeof(bool));
+	marked = (bool *) malloc(INFINITE_BUFFER * sizeof(bool));
 
-	for(i=0;i<WINSIZE * MSS;i++)
+	for(i=0;i<INFINITE_BUFFER;i++)
 		marked[i] = false;
 
 	RF = 0;
 	RN = RF + WINSIZE;
 	VRF = RF;
 
-	buffer = (char *) malloc(WINSIZE * MSS * 2);
+	buffer = (char *) malloc(INFINITE_BUFFER * 2);
 	request = (char *) malloc(MSS);
 	segment = (char *) malloc(MSS);
 
@@ -230,7 +258,7 @@ int main(int argc, char **argv)
 #ifdef APP
 	printf("[log] buffer full.. waiting\n");
 #endif
-			sleep(2);
+			sleep(1);
 		}
 
 		bytesRead = read_from(sock, request, MSS, &clientCon);
@@ -268,7 +296,14 @@ int main(int argc, char **argv)
 
 		if(recvSeq > RF * MSS && !nakSent)
 		{
+			removeHeader(request);
 
+			storeSegment(request, recvSeq);
+
+			marked[recvSeq] = true;
+#ifdef APP
+	printf("[log] marking %d\n", recvSeq);
+#endif
 			sendNak(sock, req_from, in_port);
 
 			nakSent = true;
@@ -277,7 +312,7 @@ int main(int argc, char **argv)
 		{
 			removeHeader(request);
 
-			storeSegment(request);
+			storeSegment(request, recvSeq);
 
 			marked[recvSeq] = true;
 #ifdef APP
@@ -286,7 +321,7 @@ int main(int argc, char **argv)
 		}
 		else if(recvSeq == RF * MSS) // correct segment. yay!!!
 		{
-			int prev;
+			uint prev;
 
 #ifdef APP
 	printf("[log] valid segment found for seq no: %d\n", RF * MSS);
@@ -300,12 +335,12 @@ int main(int argc, char **argv)
 	}
 	else
 	{
-		sleep(2);
+		usleep(100);
 	}
 #endif	
 			removeHeader(request);
 
-			storeSegment(request);
+			storeSegment(request, recvSeq);
 
 			marked[recvSeq] = true;
 
@@ -313,7 +348,7 @@ int main(int argc, char **argv)
 	printf("[log] marking %d\n", recvSeq);
 #endif
 
-			for(i= RF * MSS; marked[i] == true || RF < VRF ; i = (i + MSS - HEADSIZE) % (WINSIZE * MSS))
+			for(i= RF * (MSS); marked[i] == true || RF < VRF ; i = (i + MSS))
 			{
 #ifdef APP
 	printf("[log] extracting from buffer at location %d:\n", i);
@@ -336,7 +371,7 @@ int main(int argc, char **argv)
 
 				marked[i] = false;
 #ifdef APP
-	printf("[log] marking %d false\n", recvSeq);
+	printf("[log] marking %d false\n", i);
 #endif
 				prev = i; // prev points to previous frame to be acknowledged. This is for cumulative ack
 			}
@@ -344,12 +379,12 @@ int main(int argc, char **argv)
 			nakSent = false;
 
 			sendAck(sock, prev, req_from, in_port); // send cumulative ack
-			assert(RF == VRF);
+			//assert(RF == VRF);
 		}
 		else
 		{
 #ifdef APP
-	printf("[log] discarding packet\n");
+	printf("[log] discarding packet RF: %d, RN = %d\n", RF, RN);
 #endif
 
 			// take no action. sliently discard
@@ -358,6 +393,16 @@ int main(int argc, char **argv)
 		packetCount++;
 	}
 	
+	// here write remaining file in buffer
+
+	for(i = RF * MSS; i <= RN * MSS; i += MSS)
+	{
+		for(j=0; j<MSS - HEADSIZE; j++)
+			segment[j] = buffer[i + j];
+
+		writeToFile(file, segment, MSS - HEADSIZE); 
+	}
+
 	close_sock(sock);
 	close(file);
 

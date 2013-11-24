@@ -27,4 +27,4 @@ clean:
 	rm -f *.o
 	rm -r exec/*
 	cd sock; make clean	
-        
+	rm -f test/received.txt        

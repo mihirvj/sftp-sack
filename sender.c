@@ -19,8 +19,10 @@
 
 #define EXPAND_WIN() SN = (SN + 1) % WINSIZE
 #define SLIDE_WIN() SF = (SF + 1) % WINSIZE; \
-		AN = (AN + MSS) % (WINSIZE * MSS)
+		AN = (AN + MSS)
 
+#define IS_WIN_FULL() ((SN - SF) == -1)
+#define CAN_STOP_LISTENING() ((SN - SF) == 0 && fileEnded)
 
 uint SF = 0; // first outstanding frame index
 uint SN = 0; // next frame to be sent
@@ -111,6 +113,7 @@ pthread_t threads;
 pthread_mutex_t mutex;
 
 uint seqNo = 0;
+bool fileEnded = false;
 
 int main(int argc, char **argv)
 {
@@ -193,13 +196,13 @@ int main(int argc, char **argv)
 			break;
 		}
 
-		while((SN - SF) >= WINSIZE) // wait while window iss full
+		while(IS_WIN_FULL()) // wait while window iss full
 		{
 #ifdef APP
 	printf("[log] Win size full.. waiting\n");
 	printWinStats();
 #endif
-			sleep(2);
+			sleep(1);
 		}
 
 		segment[curIndex] = (int) nextChar; // add to buffer
@@ -221,10 +224,10 @@ int main(int argc, char **argv)
 #ifdef DELAY
 	//if(seqNo > 1000)// || debug == 1)
 	{
-		sleep(1);
+		usleep(100);
 	}
 #endif 
-			seqNo = (seqNo + MSS) % BUFSIZE;
+			seqNo = (seqNo + MSS);
 			curIndex = 0;
 
 			memset(segment, '\0', MSS);
@@ -236,6 +239,8 @@ int main(int argc, char **argv)
 	printf("[log] cur index: %d\n", curIndex);
 #endif
 	}
+
+	fileEnded = true;
 
 	pthread_join(threads, NULL);
 
@@ -266,7 +271,7 @@ void *listener(void *arg)
 #endif
 		bytesRead = read_from(sock, response, HEADSIZE, &serverCon);
 
-		if((SN - SF) <= 0)
+		if(CAN_STOP_LISTENING())
 			pthread_exit(NULL); // termintate if window is full
 
 		// timeout after TIMEOUT seconds
@@ -293,10 +298,21 @@ void *listener(void *arg)
 				}
 				else if(recvAck > AN)
 				{
+					uint prevAN = AN;
+
+#ifdef APP
+	printf("[log] sliding window by: %d\n", (recvAck - prevAN) / (MSS) + 1);
+#endif
 					// purge frame and slide head pointer multiple times due to cumulative acks
-					for(i = 0; i != (recvAck / MSS) || !isFirst; i++)
+					for(i = 0; i <= ((recvAck - prevAN) / (MSS)) || isFirst; i++)
 					{
 						SLIDE_WIN();
+
+						if(IS_WIN_FULL())
+							break;
+#ifdef APP
+	printf("AN: %d\n", AN);
+#endif
 						isFirst = false;
 					}
 				}
@@ -356,7 +372,8 @@ void sendSelective(int sock)
 	uchar segment[MSS];
 	int i;
 
-	for(count = SF * MSS; count < ((SF + 1) * MSS) % (WINSIZE * MSS); count++)
+	
+	for(count = SF * MSS; count < ((SF + 1) * MSS); count++)
 	{
 		segment[prevIndex] = buffer[count];
 		
