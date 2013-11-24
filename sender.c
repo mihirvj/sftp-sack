@@ -11,8 +11,9 @@
 #include "fops/fileop.h"
 #include<stdbool.h>
 
-#define SERVER_ADDR "127.0.0.1"
-#define SERVER_PORT 7735
+//#define SERVER_ADDR "152.1.247.155"
+//#define SERVER_ADDR "127.0.0.1"
+//#define SERVER_PORT 65413
 #define CLIENT_PORT 12001
 #define TIMEOUT 2
 
@@ -26,7 +27,10 @@ uint SN = 0; // next frame to be sent
 uint AN = 0; // next frame to be acknowledged
 uchar *buffer;
 
-void attachHeader(uchar segment[MSS], uint seq)
+char *SERVER_ADDR;
+int SERVER_PORT;
+
+void attachHeader(uchar *segment, uint seq)
 {	
 	int i;
 
@@ -59,7 +63,7 @@ void attachHeader(uchar segment[MSS], uint seq)
 #endif
 }
 
-void storeSegment(uchar segment[MSS])
+void storeSegment(uchar *segment)
 {
 	int i;
 	uint bufSize = WINSIZE * MSS * 2;
@@ -70,7 +74,7 @@ void storeSegment(uchar segment[MSS])
 	}
 }
 
-void sendSegment(int sock, uchar segment[MSS], int buf_len)
+void sendSegment(int sock, uchar *segment, int buf_len)
 {
 	segment[buf_len] = '\0';
 
@@ -108,16 +112,27 @@ pthread_mutex_t mutex;
 
 uint seqNo = 0;
 
-int main()
+int main(int argc, char **argv)
 {
 	int sock;
-	uchar response[HEADSIZE], nextChar, segment[MSS];
+	uchar response[HEADSIZE], nextChar, *segment;
 	int file, i;
-	int BUFSIZE = WINSIZE * MSS, curIndex = 0;
-	
-#ifdef APP
-	int debug = 0;
-#endif	
+	int BUFSIZE, curIndex = 0;
+
+	char *fileName;
+
+	if(argc < 6)
+	{
+		printf("[usage] ./sender <server_addr> <server_port> <file_name> <win_size> <MSS>\n");
+		return 1;
+	}
+
+	/**************** Read console parameters *************/
+	SERVER_ADDR = argv[1];
+	SERVER_PORT = atoi(argv[2]);
+	fileName = argv[3];
+	WINSIZE = atoi(argv[4]);
+	MSS = atoi(argv[5]);
 
 	//	|_|_|(|_|_|_|_|_|_|_|)|_|_|
 	//	      SF    WINDOW    SN
@@ -125,18 +140,27 @@ int main()
 	/******************* Initialization ************/
 	// buffer is a data structure over which window moves
 	buffer = (char *) malloc(WINSIZE * MSS * 2);
+	segment = (char *) malloc(MSS + HEADSIZE);
 
 	SF = 0;
 	SN = 0;
+	BUFSIZE = WINSIZE * MSS;
 
 	sock = get_sock();
 
 	bind_sock(sock, CLIENT_PORT, TIMEOUT); // seconds timeout
 
-	file = get_file_descriptor("test/sending.txt", Read);
+	file = get_file_descriptor(fileName, Read);
 
+
+	/****************** Establish parameters with receiver ************/
+
+	write_to(sock, argv[4], strlen(argv[4]), SERVER_ADDR, SERVER_PORT); // send WINSIZE
+	write_to(sock, argv[5], strlen(argv[5]), SERVER_ADDR, SERVER_PORT); // send MSS
 	
 	/***************** Selective ACK Algorithm **********/
+
+	MSS = MSS + HEADSIZE;
 
 	// start a listener thread
 	pthread_mutex_init(&mutex, NULL);
@@ -198,7 +222,6 @@ int main()
 	//if(seqNo > 1000)// || debug == 1)
 	{
 		sleep(1);
-		debug = 1;
 	}
 #endif 
 			seqNo = (seqNo + MSS) % BUFSIZE;
@@ -238,6 +261,9 @@ void *listener(void *arg)
 
 	while(1)
 	{
+#ifdef APP
+	printf("[log] waiting for response\n");
+#endif
 		bytesRead = read_from(sock, response, HEADSIZE, &serverCon);
 
 		if((SN - SF) <= 0)
@@ -306,8 +332,6 @@ int isValid(uchar segment[HEADSIZE])
 
 #ifdef APP
 	printf("[log] received ack for: %d\nexpected: %d\n", ackNo, AN);
-	printf("flag: %d\n", ackNo < 0);
-
 #endif
 
 	if(ackNo == -1)

@@ -11,7 +11,7 @@
 #include<stdbool.h>
 #include<assert.h>
 
-#define SERVER_PORT 7735
+//#define SERVER_PORT 65413
 #define SLIDE_WIN() RF = (RF + 1) % WINSIZE;\
 		RN = (RN + 1) % WINSIZE
 
@@ -22,13 +22,13 @@ uint VRF; // virtual receiver window head pointer
 
 char *buffer;
 
-bool marked[WINSIZE * MSS]; // this data structure directly maps to the sequence number. marked[429] is for seq no: 429
+bool *marked; // this data structure directly maps to the sequence number. marked[429] is for seq no: 429
 bool nakSent = false;
 bool ackRequired = false;
 
-int isValid(uchar segment[MSS]);
+int isValid(uchar *segment);
 
-void removeHeader(uchar segment[MSS])
+void removeHeader(uchar *segment)
 {
 	int i;
 
@@ -38,7 +38,7 @@ void removeHeader(uchar segment[MSS])
 	segment[i] = '\0';
 }
 
-void storeSegment(uchar segment[MSS])
+void storeSegment(uchar *segment)
 {
 	int i;
 	uint bufSize = WINSIZE * MSS * 2;
@@ -120,7 +120,7 @@ void sendAck(int sock, uint prev, char senderIP[50], int senderPort)
 	write_to(sock, segment, HEADSIZE, senderIP, senderPort);
 }
 
-void writeToFile(int file, uchar segment[MSS], int buf_len)
+void writeToFile(int file, uchar *segment, int buf_len)
 {
 	int i, validCount = 0;
 
@@ -148,7 +148,7 @@ void writeToFile(int file, uchar segment[MSS], int buf_len)
 	output_to(file, segment, validCount);
 }
 
-uint extractSeqNo(uchar segment[MSS])
+uint extractSeqNo(uchar *segment)
 {
 	uint seqNo = 0;
 
@@ -162,36 +162,66 @@ uint extractSeqNo(uchar segment[MSS])
 	return seqNo;
 }
 
-int main()
+int main(int argc, char **argv)
 {
 	int sock, in_port;
-	uchar request[MSS], req_from[50], segment[MSS];
+	uchar *request, req_from[50], *segment, initParam[10];
 	struct sockaddr_in clientCon;
 	char ack[HEADSIZE];
 	int file, i, j, bytesRead, packetCount = 0;
 	uint recvSeq;
 
+	char *fileName;
+	int SERVER_PORT;
+	int probLoss;
+
+	if(argc < 4)
+	{
+		printf("[usage] ./receiver <server_port> <file_name> <probability>\n");
+		return 1;
+	}
+
+	/********************Read conole parameters***************/
+
+	SERVER_PORT = atoi(argv[1]);
+	fileName = argv[2];
+	probLoss = atoi(argv[3]);
 /*
 	|_(|_|_|_|_|_|_|)_|
 	  RF           RN
 */
+
+
+	sock = get_sock();
+
+	file = get_file_descriptor(fileName, Create);
+
+	bind_sock(sock, SERVER_PORT);
+
+	listen_sock(sock);
+
+	read_from(sock, initParam, 10, &clientCon); // read WINSIZE
+	WINSIZE = atoi(initParam);
+
+	read_from(sock, initParam, 10, &clientCon); // read MSS
+	MSS = atoi(initParam) + HEADSIZE;
+
+#ifdef APP
+	printf("[log] params set: winsize = %d, mss = %d\n", WINSIZE, MSS);
+#endif
+
+	marked = (bool *) malloc(WINSIZE * MSS * sizeof(bool));
+
+	for(i=0;i<WINSIZE * MSS;i++)
+		marked[i] = false;
 
 	RF = 0;
 	RN = RF + WINSIZE;
 	VRF = RF;
 
 	buffer = (char *) malloc(WINSIZE * MSS * 2);
-
-	sock = get_sock();
-
-	file = get_file_descriptor("test/received.txt", Create);
-
-	bind_sock(sock, SERVER_PORT);
-
-	listen_sock(sock);
-
-	for(i=0;i<WINSIZE * MSS;i++)
-		marked[i] = false;
+	request = (char *) malloc(MSS);
+	segment = (char *) malloc(MSS);
 
 	while(1) // listen continuosly
 	{
@@ -262,7 +292,7 @@ int main()
 	printf("[log] valid segment found for seq no: %d\n", RF * MSS);
 #endif
 #ifdef DROP
-	if(packetCount % 3 == 0 && packetCount != 0)
+	if(packetCount % probLoss == 0 && packetCount != 0)
 	{
 		printf("[drop log]\n-------------- dropping packet: %d at seq no: %d\n---------------\n", packetCount, recvSeq);
 		packetCount++;
