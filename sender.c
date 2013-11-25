@@ -44,6 +44,11 @@ void attachHeader(uchar *segment, uint seq)
 	printf("[log] adding seq no: %d\n", seq);
 #endif
 
+	segment[6] = 0x55;
+	segment[7] = 0x55;
+	segment[4] = 0xFF;
+	segment[5] = 0xFF;
+
 // prepend header length
 	segment[3] = (char) seq & 0xFF;
 	segment[2] = (char) (seq >> 8) & 0xFF;
@@ -88,13 +93,11 @@ uint extractAckNo(uchar segment[HEADSIZE])
 	uint ackNo = 0;
 	bool nak = false;
 
-	if((uint) segment[0] == 255) // NAK
+	if(segment[4] == 0x42 && segment[5] == 0x49)
 		nak = true;
-	else
-	{
-		ackNo = (uint) segment[0];
-		ackNo = ackNo << 24;
-	}
+
+	ackNo = (uint) segment[0];
+	ackNo = ackNo << 24;
 
 	ackNo = ackNo + (((uint) segment[1]) << 16);
 	ackNo = ackNo + (((uint) segment[2]) << 8);
@@ -224,7 +227,7 @@ int main(int argc, char **argv)
 #ifdef DELAY
 	//if(seqNo > 1000)// || debug == 1)
 	{
-		usleep(100);
+	//	usleep(100);
 	}
 #endif 
 			seqNo = (seqNo + MSS);
@@ -277,7 +280,7 @@ void *listener(void *arg)
 		// timeout after TIMEOUT seconds
 		if(bytesRead < 0)
 		{
-			printf("timer expired for sequence number: %d\n", AN);
+			printf("Timeout, sequence number = %d\n", AN);
 			pthread_mutex_lock(&mutex);	
 			sendSelective(sock);
 			pthread_mutex_unlock(&mutex);

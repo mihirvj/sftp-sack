@@ -9,7 +9,7 @@
 #include "config.h"
 #include "fops/fileop.h"
 #include<stdbool.h>
-#include<assert.h>
+#include<sys/time.h>
 
 //#define SERVER_PORT 65413
 #define SLIDE_WIN() RF = (RF + 1);\
@@ -73,10 +73,15 @@ void sendNak(int sock, char senderIP[50], int senderPort)
 	uint nakNo = (RF * MSS);
 	uchar segment[HEADSIZE];
 
+	segment[7] = 0xFF;
+	segment[6] = 0xFF;
+	segment[4] = 0x42;
+	segment[5] = 0x49;
+
 	segment[3] = nakNo & 0xFF;
 	segment[2] = (nakNo >> 8) & 0xFF;
 	segment[1] = (nakNo >> 16) & 0xFF;
-	segment[0] = -1;
+	segment[0] = (nakNo >> 24) & 0xFF;
 
 #ifdef APP
 	printf("[log] nak sent for %d:\n", nakNo);
@@ -95,6 +100,11 @@ void sendAck(int sock, uint prev, char senderIP[50], int senderPort)
 	int i;
 	uint ackNo = prev;
 	uchar segment[HEADSIZE];
+
+	segment[7] = 0xFF;
+	segment[6] = 0xFF;
+	segment[4] = 0xFF;
+	segment[5] = 0xFF;
 
 	segment[3] = ackNo & 0xFF;
 	segment[2] = (ackNo >> 8) & 0xFF;
@@ -154,7 +164,7 @@ uint extractSeqNo(uchar *segment)
 	return seqNo;
 }
 
-bool canDrop(int packetCount, int probLoss);
+bool canDrop(double probLoss);
 
 int main(int argc, char **argv)
 {
@@ -167,7 +177,7 @@ int main(int argc, char **argv)
 
 	char *fileName;
 	int SERVER_PORT;
-	int probLoss;
+	double probLoss;
 
 	if(argc < 4)
 	{
@@ -179,7 +189,10 @@ int main(int argc, char **argv)
 
 	SERVER_PORT = atoi(argv[1]);
 	fileName = argv[2];
-	probLoss = atoi(argv[3]);
+	probLoss = atof(argv[3]);
+
+	srand(time(NULL));
+
 /*
 	|_(|_|_|_|_|_|_|)_|
 	  RF           RN
@@ -204,7 +217,7 @@ int main(int argc, char **argv)
 	printf("[log] params set: winsize = %d, mss = %d\n", WINSIZE, MSS);
 #endif
 
-	marked = (bool *) malloc(INFINITE_BUFFER * sizeof(bool));
+	marked = (bool *) malloc(INFINITE_BUFFER * sizeof(bool) * 2);
 
 	for(i=0;i<INFINITE_BUFFER;i++)
 		marked[i] = false;
@@ -292,7 +305,7 @@ int main(int argc, char **argv)
 #ifdef APP
 	printf("[log] valid segment found for seq no: %d\n", RF * MSS);
 #endif
-			if(canDrop(packetCount, probLoss))
+			if(canDrop(probLoss) && packetCount > 0)
 			{
 				printf("Packet loss, sequence number: %d\n", recvSeq);
 				packetCount++;
@@ -300,7 +313,7 @@ int main(int argc, char **argv)
 			}
 			else
 			{
-				usleep(100);
+				//usleep(100);
 			}
 		
 			removeHeader(request);
@@ -394,7 +407,7 @@ int isValid(uchar segment[MSS])
 	return seqNo >= (RF * MSS) && seqNo <= (RN * MSS);
 }
 
-bool canDrop(int packetCount, int probLoss)
+bool canDrop(double probLoss)
 {
-	return (packetCount % probLoss == 0 && packetCount != 0);
+	return (((double)rand() / (double)RAND_MAX ) <= probLoss) ;
 }
