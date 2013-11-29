@@ -15,7 +15,7 @@
 #define SLIDE_WIN() RF = (RF + 1);\
 		RN = (RN + 1)
 
-#define IS_IN_WINDOW(seq) (seq > RF * MSS)
+#define IS_IN_WINDOW(seq) (seq > RF * MSS && seq < RN * MSS)
 #define INFINITE_BUFFER 1024 * 1024
 
 uint RF, RN; // receiver window variables
@@ -172,8 +172,9 @@ int main(int argc, char **argv)
 	uchar *request, req_from[50], *segment, initParam[10];
 	struct sockaddr_in clientCon;
 	char ack[HEADSIZE];
-	int file, i, j, bytesRead, packetCount = 0;
+	int file, i, j, bytesRead;
 	uint recvSeq;
+	uint packetCount = 0, lastPacketLost = 0;
 
 	char *fileName;
 	int SERVER_PORT;
@@ -269,10 +270,16 @@ int main(int argc, char **argv)
 		printf("%c(%d), ", request[i], (int) request[i]);
 
 	printf("\n[/log]\n");
+
+	printf("[log] expected seq no: %d\n", RF * MSS);
 #endif
 
 		recvSeq = extractSeqNo(request);
 
+#ifdef APP
+	printf("[log] received seq no: %d\n", recvSeq);
+
+#endif
 		if(recvSeq > RF * MSS && !nakSent)
 		{
 			removeHeader(request);
@@ -305,15 +312,20 @@ int main(int argc, char **argv)
 #ifdef APP
 	printf("[log] valid segment found for seq no: %d\n", RF * MSS);
 #endif
-			if(canDrop(probLoss) && packetCount > 0)
+			if(canDrop(probLoss) && recvSeq != lastPacketLost)
 			{
 				printf("Packet loss, sequence number: %d\n", recvSeq);
 				packetCount++;
+				lastPacketLost = recvSeq;
 				continue;
 			}
 			else
 			{
-				//usleep(100);
+#ifdef DELAY
+	sleep(1);
+#else
+	usleep(10);
+#endif
 			}
 		
 			removeHeader(request);

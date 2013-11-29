@@ -15,19 +15,20 @@
 //#define SERVER_ADDR "127.0.0.1"
 //#define SERVER_PORT 65413
 #define CLIENT_PORT 12001
-#define TIMEOUT 2
+#define TIMEOUT 1
 
-#define EXPAND_WIN() SN = (SN + 1) % WINSIZE
-#define SLIDE_WIN() SF = (SF + 1) % WINSIZE; \
+#define EXPAND_WIN() SN = (SN + 1) % VWIN
+#define SLIDE_WIN() SF = (SF + 1) % VWIN; \
 		AN = (AN + MSS)
 
-#define IS_WIN_FULL() ((SN - SF) == -1)
-#define CAN_STOP_LISTENING() ((SN - SF) == 0 && fileEnded)
+#define IS_WIN_FULL() (((SN + 1) % VWIN) == SF)
+#define CAN_STOP_LISTENING() (fileEnded && (SN - SF) == 0)
 
 uint SF = 0; // first outstanding frame index
 uint SN = 0; // next frame to be sent
 uint AN = 0; // next frame to be acknowledged
 uchar *buffer;
+uint VWIN = 0;
 
 char *SERVER_ADDR;
 int SERVER_PORT;
@@ -103,6 +104,10 @@ uint extractAckNo(uchar segment[HEADSIZE])
 	ackNo = ackNo + (((uint) segment[2]) << 8);
 	ackNo = ackNo + ((uint) segment[3]);
 
+#if 0
+printf("[log] ack: %d\n", nak ? -1 * ackNo : ackNo);
+#endif
+
 	return nak ? (-1) : ackNo;
 }
 
@@ -174,6 +179,8 @@ int main(int argc, char **argv)
 
 	memset(segment, '\0', MSS);
 
+	VWIN = WINSIZE + 1;
+
 	while(1)
 	{
 		nextChar = rdt_send(file); // read next char
@@ -226,9 +233,9 @@ int main(int argc, char **argv)
 
 #ifdef DELAY
 	//if(seqNo > 1000)// || debug == 1)
-	{
-	//	usleep(100);
-	}
+	sleep(1);
+#else
+	usleep(10);
 #endif 
 			seqNo = (seqNo + MSS);
 			curIndex = 0;
@@ -275,7 +282,12 @@ void *listener(void *arg)
 		bytesRead = read_from(sock, response, HEADSIZE, &serverCon);
 
 		if(CAN_STOP_LISTENING())
+		{
+#ifdef APP
+	printf("\n------------------------- LISTENING THREAD EXIT ------------------------\n");
+#endif
 			pthread_exit(NULL); // termintate if window is full
+		}
 
 		// timeout after TIMEOUT seconds
 		if(bytesRead < 0)
@@ -300,6 +312,9 @@ void *listener(void *arg)
 				else if(recvAck > AN)
 				{
 					uint prevAN = AN;
+#if 0
+	printf("in for loop\n");
+#endif
 
 #ifdef APP
 	printf("[log] sliding window by: %d\n", (recvAck - prevAN) / (MSS) + 1);
@@ -317,6 +332,9 @@ void *listener(void *arg)
 						isFirst = false;
 					}
 				}
+#if 0
+	printf("next seq no expected: %d\n", AN);
+#endif
 
 				printWinStats();
 			}
@@ -324,6 +342,9 @@ void *listener(void *arg)
 			{
 #ifdef APP
 	printf("[log] incorrect header for sequence number: %d\n", AN);
+#endif
+#if 0
+printf("incorrect header SF: %d\n", SF);
 #endif
 				pthread_mutex_lock(&mutex);
 				sendSelective(sock);
@@ -337,13 +358,6 @@ void *listener(void *arg)
 int isValid(uchar segment[HEADSIZE])
 {
 	uint ackNo = 0;
-
-	/*ackNo = (uint) segment[0];
-	ackNo = ackNo << 24;
-
-	ackNo = ackNo + (((uint) segment[1]) << 16);
-	ackNo = ackNo + (((uint) segment[2]) << 8);
-	ackNo = ackNo + ((uint) segment[3]);*/
 
 	ackNo = extractAckNo(segment);
 
@@ -372,7 +386,7 @@ void sendSelective(int sock)
 	int count = SF;
 	uchar segment[MSS];
 	int i;
-
+	uint sackNo;
 	
 	for(count = SF * MSS; count < ((SF + 1) * MSS); count++)
 	{
@@ -390,6 +404,17 @@ void sendSelective(int sock)
 		printf("%c(%d), ", segment[i], (int) segment[i]);
 
 	printf("\n");
+#endif
+
+	sackNo = (uint) segment[0];
+	sackNo = sackNo << 24;
+
+	sackNo = sackNo + (((uint) segment[1]) << 16);
+	sackNo = sackNo + (((uint) segment[2]) << 8);
+	sackNo = sackNo + ((uint) segment[3]);
+
+#if 0
+printf("[log] resending seq no: %d\n", sackNo);
 #endif
 
 		memset(segment, 0, MSS);
